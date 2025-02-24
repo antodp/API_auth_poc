@@ -14,9 +14,9 @@ export class GatewayCdkStack extends cdk.Stack {
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
     });
 
-    // ✅ 2. Create a Lambda Function for API Key Generation
+    // ✅ 2. Create a Lambda Function for API Key Generation (Python Version)
     const createKeyLambda = new lambda.Function(this, 'CreateKeyLambda', {
-      runtime: lambda.Runtime.NODEJS_18_X,
+      runtime: lambda.Runtime.PYTHON_3_9,
       handler: 'index.handler',
       code: lambda.Code.fromAsset('lambda/create-key'),
       environment: {
