@@ -8,62 +8,88 @@ export class GatewayCdkStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-    // ✅ 1. Create a DynamoDB Table for API Keys
+    // ✅ 1. Create DynamoDB Table for API Keys & Quotas
     const apiKeyTable = new dynamodb.Table(this, 'ApiKeyTable', {
       partitionKey: { name: 'api_key', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
     });
 
-    // ✅ 2. Create Lambda for API Key Issuance
+    // ✅ 2. Create DynamoDB Table for API Provider Mappings (Endpoint + Secret Key)
+    const providerTable = new dynamodb.Table(this, 'ProviderTable', {
+      partitionKey: { name: 'provider_id', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+    });
+
+    // ✅ 3. Create Lambda Function for API Key Issuance
     const createKeyLambda = new lambda.Function(this, 'CreateKeyLambda', {
       runtime: lambda.Runtime.PYTHON_3_9,
       handler: 'index.handler',
       code: lambda.Code.fromAsset('lambda/create-key'),
       environment: {
-        TABLE_NAME: apiKeyTable.tableName,
+        API_KEY_TABLE: apiKeyTable.tableName,
+        PROVIDER_TABLE: providerTable.tableName,
       },
     });
 
-    apiKeyTable.grantWriteData(createKeyLambda);
-
-    // ✅ 3. Create Lambda Authorizer
-    const authorizerLambda = new lambda.Function(this, 'LambdaAuthorizer', {
-      runtime: lambda.Runtime.PYTHON_3_9,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('lambda/authorizer'),
-      environment: {
-        TABLE_NAME: apiKeyTable.tableName,
-      },
-    });
-
-    apiKeyTable.grantReadWriteData(authorizerLambda);
-
-    // ✅ 4. Create API Gateway
-    const api = new apigateway.RestApi(this, 'ApiGateway', {
-      restApiName: 'ApiGatewayPoc',
-    });
-
-    // ✅ 5. Attach Lambda Authorizer to API Gateway
-    const authorizer = new apigateway.RequestAuthorizer(this, 'APIAuthorizer', {
-      handler: authorizerLambda,
-      identitySources: [apigateway.IdentitySource.header("Authorization")],
-      resultsCacheTtl: cdk.Duration.seconds(0), // No caching for real-time quota updates
-    });
-
-    // ✅ 6. API Gateway Endpoint for API Key Creation (Unprotected)
-    const createKeyIntegration = new apigateway.LambdaIntegration(createKeyLambda);
-    api.root.addResource('create-key').addMethod('POST', createKeyIntegration);
-
-    // ✅ 7. Deploy Dummy "Hello World" API with Authorization
+    // ✅ 4. Create the Hello World Lambda (Provider's API for Testing)
     const helloLambda = new lambda.Function(this, 'HelloLambda', {
       runtime: lambda.Runtime.PYTHON_3_9,
       handler: 'index.handler',
       code: lambda.Code.fromAsset('lambda/hello-world'),
     });
 
-    const helloIntegration = new apigateway.LambdaIntegration(helloLambda);
+    // ✅ 5. Grant Lambda Permissions to Write to DynamoDB
+    apiKeyTable.grantWriteData(createKeyLambda);
+    providerTable.grantWriteData(createKeyLambda);
+
+    // ✅ 6. Create Lambda Authorizer (Validates API Key + Quota + Fetches Provider Secret)
+    const authorizerLambda = new lambda.Function(this, 'LambdaAuthorizer', {
+      runtime: lambda.Runtime.PYTHON_3_9,
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset('lambda/authorizer'),
+      environment: {
+        API_KEY_TABLE: apiKeyTable.tableName,
+        PROVIDER_TABLE: providerTable.tableName,
+      },
+    });
+
+    // ✅ 7. Grant Lambda Permission to Read/Update DynamoDB
+    apiKeyTable.grantReadWriteData(authorizerLambda);
+    providerTable.grantReadWriteData(authorizerLambda);
+
+    // ✅ 8. Create API Gateway
+    const api = new apigateway.RestApi(this, 'ApiGateway', {
+      restApiName: 'ApiGatewayPoc',
+    });
+
+    // ✅ 9. Attach Lambda Authorizer to API Gateway
+    const authorizer = new apigateway.RequestAuthorizer(this, 'APIAuthorizer', {
+      handler: authorizerLambda,
+      identitySources: [apigateway.IdentitySource.header("Authorization")],
+      resultsCacheTtl: cdk.Duration.seconds(0), // No caching for real-time quota updates
+    });
+
+    // ✅ 10. Create an API Gateway endpoint to expose HelloLambda (Unprotected for Now)
     const helloResource = api.root.addResource('hello');
-    helloResource.addMethod('GET', helloIntegration, {
+    helloResource.addMethod('GET', new apigateway.LambdaIntegration(helloLambda));
+
+    // ✅ 11. API Gateway Endpoint for API Key Creation (Unprotected)
+    const createKeyIntegration = new apigateway.LambdaIntegration(createKeyLambda);
+    api.root.addResource('create-key').addMethod('POST', createKeyIntegration);
+
+    // ✅ 12. Create Lambda for Multi-Tenant Request Forwarding
+    const routerLambda = new lambda.Function(this, 'RouterLambda', {
+      runtime: lambda.Runtime.PYTHON_3_9,
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset('lambda/router'), // NO BUNDLING!
+      environment: {
+        PROVIDER_TABLE: providerTable.tableName,
+      },
+    });
+
+    // ✅ 13. API Gateway Protected Route (Forwards Request to Third-Party API)
+    const protectedResource = api.root.addResource('request');
+    protectedResource.addMethod('GET', new apigateway.LambdaIntegration(routerLambda), {
       authorizationType: apigateway.AuthorizationType.CUSTOM,
       authorizer: authorizer,
     });
