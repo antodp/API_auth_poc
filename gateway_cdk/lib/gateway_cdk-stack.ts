@@ -3,6 +3,7 @@ import { Construct } from 'constructs';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as iam from 'aws-cdk-lib/aws-iam'
 
 export class GatewayCdkStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -87,11 +88,29 @@ export class GatewayCdkStack extends cdk.Stack {
       },
     });
 
+    // grant read access to ProviderTable
+    providerTable.grantReadWriteData(routerLambda);
+
     // ✅ 13. API Gateway Protected Route (Forwards Request to Third-Party API)
-    const protectedResource = api.root.addResource('request');
-    protectedResource.addMethod('GET', new apigateway.LambdaIntegration(routerLambda), {
+    const providerResource = api.root.addResource('api').addResource('{provider_id}').addResource('invoke');
+    providerResource.addMethod('POST', new apigateway.LambdaIntegration(routerLambda), {
       authorizationType: apigateway.AuthorizationType.CUSTOM,
       authorizer: authorizer,
+    });
+
+
+    const plan = api.addUsagePlan('DefaultUsagePlan', {
+      name: 'BasicRateLimitPlan',
+      throttle: {
+        rateLimit: 10, // max 10 requests per second per user default
+        burstLimit: 20, // allows short bursts of 20 requests default
+      },
+    });
+
+    // ✅ Allow only API Gateway to invoke the Router Lambda
+    routerLambda.addPermission('ApiGatewayInvoke', {
+      principal: new iam.ServicePrincipal('apigateway.amazonaws.com'), // Only API Gateway can invoke it
+      sourceArn: `${api.arnForExecuteApi()}` // Lock it to this API Gateway
     });
   }
 }

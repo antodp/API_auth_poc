@@ -16,6 +16,7 @@ def handler(event, context):
         request_body = json.loads(event["body"])
         quota = request_body.get("quota")
         target_url = request_body.get("target_url")
+        expected_method = request_body.get("expected_method", "GET")  # ✅ Default to GET if not provided
 
         if not quota or not target_url:
             return {"statusCode": 400, "body": json.dumps({"error": "Quota and target_url required"})}
@@ -30,11 +31,12 @@ def handler(event, context):
             "target_url": target_url
         })
 
-        # Store the provider’s secret key in the provider table (1 provider assumed)
+        # ✅ Store Provider Info with Expected Method
         provider_table.put_item(Item={
             "provider_id": STATIC_PROVIDER_ID,
             "api_url": target_url,
-            "secret_key": STATIC_SECRET_KEY
+            "secret_key": STATIC_SECRET_KEY,
+            "expected_method": expected_method  # ✅ Store expected HTTP method
         })
 
         return {
@@ -42,7 +44,8 @@ def handler(event, context):
             "body": json.dumps({
                 "api_key": api_key,
                 "quota": quota,
-                "provider_secret": STATIC_SECRET_KEY
+                "provider_secret": STATIC_SECRET_KEY,
+                "expected_method": expected_method  # ✅ Return method for confirmation
             })
         }
     except Exception as e:
